@@ -1,7 +1,11 @@
-// Initialize Speech Recognition
+// Feature Detection
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+const hasMediaDevices = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+
+// State
 let recognition;
 let isRecording = false;
+let hasInitializedMicrophone = false;
 
 // DOM Elements
 const recordButton = document.getElementById('recordButton');
@@ -11,9 +15,30 @@ const clearButton = document.getElementById('clearButton');
 const errorModal = document.getElementById('errorModal');
 const errorMessage = document.getElementById('errorMessage');
 
+// Check browser compatibility
+function checkBrowserCompatibility() {
+    if (!SpeechRecognition) {
+        showError("Speech recognition is not supported in your browser. Please try using Chrome.");
+        recordButton.classList.add('opacity-50', 'cursor-not-allowed');
+        return false;
+    }
+    
+    if (!hasMediaDevices) {
+        showError("Microphone access is not supported in your browser. Please try using a modern browser.");
+        recordButton.classList.add('opacity-50', 'cursor-not-allowed');
+        return false;
+    }
+    
+    return true;
+}
+
 // Initialize speech recognition if supported
-function initializeSpeechRecognition() {
+async function initializeSpeechRecognition() {
     try {
+        if (!checkBrowserCompatibility()) {
+            return;
+        }
+
         recognition = new SpeechRecognition();
         recognition.continuous = false;
         recognition.interimResults = false;
@@ -28,13 +53,34 @@ function initializeSpeechRecognition() {
         // Add click event listeners
         recordButton.addEventListener('click', toggleRecording);
         clearButton.addEventListener('click', clearChat);
+
+        // Try to initialize microphone
+        const hasMicrophoneAccess = await checkMicrophonePermission();
+        if (hasMicrophoneAccess) {
+            hasInitializedMicrophone = true;
+            recordButton.classList.remove('opacity-50', 'cursor-not-allowed');
+        }
     } catch (error) {
-        showError("Speech recognition is not supported in your browser. Please try using Chrome.");
+        console.error('Error initializing speech recognition:', error);
+        showError("There was an error initializing the speech recognition. Please refresh the page and try again.");
+        recordButton.classList.add('opacity-50', 'cursor-not-allowed');
     }
 }
 
 // Toggle recording state
-function toggleRecording() {
+async function toggleRecording() {
+    if (!checkBrowserCompatibility()) {
+        return;
+    }
+
+    if (!hasInitializedMicrophone) {
+        const hasMicrophoneAccess = await checkMicrophonePermission();
+        if (!hasMicrophoneAccess) {
+            return;
+        }
+        hasInitializedMicrophone = true;
+    }
+
     if (!isRecording) {
         startRecording();
     } else {
@@ -44,11 +90,35 @@ function toggleRecording() {
 
 // Check and request microphone permission
 async function checkMicrophonePermission() {
+    if (!hasMediaDevices) {
+        return false;
+    }
+
     try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         stream.getTracks().forEach(track => track.stop());
         return true;
     } catch (error) {
+        console.error('Error accessing microphone:', error);
+        let errorMessage = "There was an error accessing your microphone.";
+        
+        switch (error.name) {
+            case 'NotAllowedError':
+            case 'PermissionDeniedError':
+                errorMessage = "Please allow microphone access to use the speaking assistant.";
+                break;
+            case 'NotFoundError':
+                errorMessage = "No microphone was found. Please connect a microphone and try again.";
+                break;
+            case 'NotReadableError':
+                errorMessage = "Your microphone is busy or not responding. Please check your device settings.";
+                break;
+            default:
+                errorMessage = "There was an error accessing your microphone. Please make sure it's properly connected and try again.";
+        }
+        
+        showError(errorMessage);
+        recordButton.classList.add('opacity-50', 'cursor-not-allowed');
         return false;
     }
 }
@@ -125,20 +195,31 @@ function handleRecognitionError(event) {
     handleRecognitionEnd();
     
     let errorMsg = "An error occurred during speech recognition. ";
+    let showTroubleshooting = true;
+
     switch(event.error) {
         case 'network':
             errorMsg += "Please check your internet connection.";
+            showTroubleshooting = false;
             break;
         case 'not-allowed':
-            errorMsg += "Please allow microphone access.";
+            errorMsg += "Please allow microphone access in your browser settings.";
             break;
         case 'no-speech':
-            errorMsg += "No speech was detected. Please try again.";
+            errorMsg += "No speech was detected. Please try speaking again.";
+            showTroubleshooting = false;
+            break;
+        case 'audio-capture':
+            errorMsg += "No microphone was found. Please connect a microphone and try again.";
+            break;
+        case 'aborted':
+            errorMsg += "Speech recognition was aborted. Please try again.";
+            showTroubleshooting = false;
             break;
         default:
             errorMsg += "Please try again.";
     }
-    showError(errorMsg);
+    showError(errorMsg, showTroubleshooting);
 }
 
 // Add message to chat
@@ -225,10 +306,59 @@ function clearChat() {
 }
 
 // Show error modal
-function showError(message) {
+function showError(message, showTroubleshooting = true) {
     errorMessage.textContent = message;
     errorModal.classList.remove('hidden');
+    
+    // Show/hide troubleshooting steps based on error type
+    const troubleshootingSteps = document.getElementById('troubleshootingSteps');
+    if (troubleshootingSteps) {
+        troubleshootingSteps.style.display = showTroubleshooting ? 'block' : 'none';
+    }
+    
+    // Reset recording state if there's an error
+    if (isRecording) {
+        isRecording = false;
+        handleRecognitionEnd();
+    }
+}
+
+// Hide error modal
+function hideErrorModal() {
+    errorModal.classList.add('hidden');
+}
+
+// Retry microphone initialization
+async function retryMicrophoneInitialization() {
+    hideErrorModal();
+    recordButton.classList.remove('opacity-50', 'cursor-not-allowed');
+    hasInitializedMicrophone = false;
+    
+    try {
+        if (!checkBrowserCompatibility()) {
+            return;
+        }
+
+        const hasMicrophoneAccess = await checkMicrophonePermission();
+        if (hasMicrophoneAccess) {
+            hasInitializedMicrophone = true;
+            recordButton.classList.remove('opacity-50', 'cursor-not-allowed');
+            statusText.textContent = 'Click the microphone to start speaking';
+        }
+    } catch (error) {
+        console.error('Error during retry:', error);
+    }
 }
 
 // Initialize when the page loads
-document.addEventListener('DOMContentLoaded', initializeSpeechRecognition);
+document.addEventListener('DOMContentLoaded', () => {
+    // Initialize speech recognition
+    initializeSpeechRecognition();
+    
+    // Set up error modal buttons
+    const retryButton = document.getElementById('retryButton');
+    const closeErrorButton = document.getElementById('closeErrorButton');
+    
+    retryButton.addEventListener('click', retryMicrophoneInitialization);
+    closeErrorButton.addEventListener('click', hideErrorModal);
+});
